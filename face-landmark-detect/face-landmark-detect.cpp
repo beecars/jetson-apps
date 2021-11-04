@@ -1,3 +1,12 @@
+// FACE-LANDMARK-DETECT.CPP 
+// 1. Detect facial landmarks from a live camera stream.
+// 2. Visualize facial landmarks in display window.
+
+// Requirement: NVIDIA JETSON PLATFORM.
+// -- (Requires "JetPack" libs: OpenCV, GStreamers, etc.)
+// GStreamer Pipline based on IMX477 CAMERA SENSOR.
+// -- (May require 3rd party driver for camera)
+
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -8,14 +17,30 @@
 
 using namespace cv;
 
+void faceLandmarkDetect() // RETRUN LANDMARK COORDINATES... CHECK OPENCV LANDMARK OPTIONS
+// Detect factial landmarks (based on OpenCV methods).
+{
+
+}
+
+void faceLandmarkDraw()
+// Visualize facial landmarks (based on OpenCV methods).
+{
+
+} 
+
 int main()
 {
 	Mat frame;
 	
-	// ---- INITIALIZE OPENCV VIDEO CAPTURE OBJECT
-	
-	// Construct GStreamer pipeline string.
-	// Tuned for "aggresive" latency (downstream framerate not enforced, sink can drop frames).
+	// ---- INITIALIZE OPENCV VIDEO CAPTURE OBJECT.
+	/* 
+       Define GStreamer pipeline.
+       Pipeline based on following config:
+       - Jetson Nano (L4T, JetPack).
+       - IMX477 camera sensor (3rd party driver required).
+	   Tuned for "aggresive" latency (downstream framerate not enforced, sink can drop frames).
+    */
 	std::string rx_gstream_pipe{ };
 	rx_gstream_pipe = "nvarguscamerasrc !    													\
 					       video/x-raw(memory:NVMM), width=(int)1920, height=(int)1080,         \
@@ -34,7 +59,7 @@ int main()
 		return -1;
 	}
 	
-	// ---- STREAM PROCESSING
+	// ---- STREAM PROCESSING.
 	
 	// Define variables for frametime measurement.
 	double fps{ 0.0 };
@@ -58,7 +83,7 @@ int main()
 			break;
 		}
 
-	// ---- PRINT FRAMERATE 
+	// ---- PRINT FRAMERATE.
 	frametime_end = std::chrono::system_clock::now();
 	elapsed_seconds = frametime_end - frametime_start;
 	fps = 1.0 / elapsed_seconds.count();
