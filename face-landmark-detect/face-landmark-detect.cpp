@@ -10,6 +10,7 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/cudaobjdetect.hpp>
 #include <iostream>
 #include <chrono>
 #include <ctime>
@@ -17,13 +18,33 @@
 
 using namespace cv;
 
-void faceLandmarkDetect() // RETRUN LANDMARK COORDINATES... CHECK OPENCV LANDMARK OPTIONS
+std::vector<Rect> faceDetect(Mat frame)
+{
+	Ptr<cuda::CascadeClassifier> face_classifer = \
+		cuda::CascadeClassifier::create("haarcascade_frontalface_default.xml");
+		
+	GpuMat frame_gpu(frame);
+	GpuMat objbuf;
+	
+	face_classifier -> detectMultiScale(frame_gpu, objbuf);
+	
+	std::vector<Rect> faces;
+	
+	face_classifier -> convert(objbuf, faces);
+}
+
+Mat facedraw(std::vector<Rect> faces_vector)
+{
+
+}
+
+void landmarkDetect() // RETRUN LANDMARK COORDINATES... CHECK OPENCV LANDMARK OPTIONS
 // Detect factial landmarks (based on OpenCV methods).
 {
 
 }
 
-void faceLandmarkDraw()
+void landmarkDraw()
 // Visualize facial landmarks (based on OpenCV methods).
 {
 
@@ -76,6 +97,9 @@ int main()
 		
 		cap.read(frame);
 		
+		// ---- DETECT FACES
+		std::vector<Rect> faces = faceDetect(frame);
+
 		imshow("Live Camera Stream", frame);
 		
 		if (waitKey(1) == 'q')	// End reading stream.
