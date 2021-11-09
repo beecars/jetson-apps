@@ -60,7 +60,6 @@ int main()
 		cap.read(frame);
 		
 		// ---- DETECT FACES
-		std::vector<Rect> faces = faceDetect(frame);
 
 		imshow("Live Camera Stream", frame);
 		
