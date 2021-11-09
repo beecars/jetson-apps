@@ -17,22 +17,8 @@ int main()
 	// Construct GStreamer pipeline string.
 	// Tuned for "aggresive" latency (downstream framerate not enforced, sink can drop frames).
 	std::string rx_gstream_pipe{ };
-	rx_gstream_pipe = "nvarguscamerasrc !    													\
-					       video/x-raw(memory:NVMM), width=(int)1920, height=(int)1080,         \
-						   framerate = 30/1 !                                                   \
-			           nvvidconv flip-method=6 !                                                \
-					       video/x-raw, format=(string)BGRx ! 									\
-				 	   videoconvert !                                                           \
-					       video/x-raw, format=(string)BGR !  					  				\
-				       appsink drop=true";
-
+	rx_gstream_pipe = "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)1920, height=(int)1080, framerate = 30/1 ! nvvidconv flip-method=6 ! video/x-raw, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink drop=true";
 	VideoCapture cap(rx_gstream_pipe, CAP_GSTREAMER);
-
-	if (!cap.isOpened())
-	{
-		std::cerr << "ERROR: Unable to open camera capture stream.";
-		return -1;
-	}
 	
 	// ---- STREAM PROCESSING
 	
