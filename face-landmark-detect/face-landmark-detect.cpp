@@ -18,19 +18,9 @@
 
 using namespace cv;
 
-std::vector<Rect> faceDetect(Mat frame)
+std::vector<Rect> faceDetectDarknet(Mat frame)
 {
-	Ptr<cuda::CascadeClassifier> face_classifer = \
-		cuda::CascadeClassifier::create("haarcascade_frontalface_default.xml");
-		
-	GpuMat frame_gpu(frame);
-	GpuMat objbuf;
 	
-	face_classifier -> detectMultiScale(frame_gpu, objbuf);
-	
-	std::vector<Rect> faces;
-	
-	face_classifier -> convert(objbuf, faces);
 }
 
 Mat facedraw(std::vector<Rect> faces_vector)
@@ -38,17 +28,6 @@ Mat facedraw(std::vector<Rect> faces_vector)
 
 }
 
-void landmarkDetect() // RETRUN LANDMARK COORDINATES... CHECK OPENCV LANDMARK OPTIONS
-// Detect factial landmarks (based on OpenCV methods).
-{
-
-}
-
-void landmarkDraw()
-// Visualize facial landmarks (based on OpenCV methods).
-{
-
-} 
 
 int main()
 {
@@ -73,12 +52,6 @@ int main()
 				       appsink drop=true";
 
 	VideoCapture cap(rx_gstream_pipe, CAP_GSTREAMER);
-
-	if (!cap.isOpened())
-	{
-		std::cerr << "ERROR: Unable to open camera capture stream.";
-		return -1;
-	}
 	
 	// ---- STREAM PROCESSING.
 	
