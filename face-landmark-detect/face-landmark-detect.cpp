@@ -18,17 +18,6 @@
 
 using namespace cv;
 
-std::vector<Rect> faceDetectDarknet(Mat frame)
-{
-	
-}
-
-Mat facedraw(std::vector<Rect> faces_vector)
-{
-
-}
-
-
 int main()
 {
 	Mat frame;
