@@ -17,12 +17,12 @@
 #include <chrono>
 #include <ctime>
 #include <string>
-
 using namespace cv;
 
 // ---- SETUP PARAMS. 
 float confThreshold = 0.5;
 float nmsThreshold = 0.4;
+int inputSize = 256;
 
 // ---- INTIALIZE FUNCTIONS.
 void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs);
@@ -79,7 +79,11 @@ int main()
 
 		// ---- DETECT FACES
 		// Create blob for network input (RGB image).
-		Mat frameBlob = dnn::blobFromImage(frame, 1/255.0, cv::Size(416, 416), cv::Scalar(0,0,0), false, false);
+		Mat frameBlob = dnn::blobFromImage(frame, 
+										   1/255.0, 
+										   cv::Size(inputSize, inputSize), 
+										   cv::Scalar(0,0,0), 
+										   false, false);
 		// Set blob as network input.
 		faceDetNet.setInput(frameBlob);
 		// Declare network output as blob (box coords, class names, confidences).
@@ -141,7 +145,11 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 	{
 		int idx = indexes[i];
 		cv::Rect box = boxes[idx];
-		drawBox(classIds[idx], confidences[idx], box.x, box.y, box.x+box.width, box.y+box.height, frame);
+		drawBox(classIds[idx], confidences[idx], 
+			    box.x, box.y, 
+				box.x + box.width, 
+				box.y + box.height, 
+				frame);
 	}
 }
 
@@ -154,8 +162,8 @@ void drawBox(int classId, float conf, int left, int top, int right, int bottom, 
 	cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
 	top = max(top, labelSize.height);
 	cv::rectangle(frame, 
-					cv::Point(left, top - round(1.5 * labelSize.height)), 
-					cv::Point(left + round(1.5 * labelSize.width), top + baseLine), 
-					cv::Scalar(255, 255, 255), FILLED);
+				  cv::Point(left, top - round(1.5 * labelSize.height)), 
+				  cv::Point(left + round(1.5 * labelSize.width), top + baseLine), 
+				  cv::Scalar(255, 255, 255), FILLED);
 	cv::putText(frame, label, Point(left, top), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(0, 0, 0), 1);
 }
