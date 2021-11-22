@@ -41,7 +41,13 @@ int main()
    	cv::Mat frame;	
 
 	std::string rx_gstream_pipe{};
-	rx_gstream_pipe = "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)1280, height=(int)720, framerate = 30/1 ! nvvidconv flip-method=6 ! video/x-raw, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink drop=true";
+	rx_gstream_pipe = "nvarguscamerasrc ! "
+					  "video/x-raw(memory:NVMM), width=(int)640, height=(int)360 framerate=(fraction)1/60 ! "
+					  "nvvidconv flip-method=6 ! "
+					  "video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! "
+					  "videoconvert ! "
+					  "video/x-raw, format=(string)BGR ! "
+					  "appsink drop=true";
 	cv::VideoCapture cap(rx_gstream_pipe, CAP_GSTREAMER);
 
 	/* ---- INITIALIZE DNN MODULE.
