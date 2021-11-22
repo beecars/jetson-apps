@@ -2,10 +2,12 @@
 // 1. Detect facial landmarks from a live camera stream.
 // 2. Visualize facial landmarks in display window.
 
-// Requirement: NVIDIA JETSON PLATFORM.
-// -- (Requires "JetPack" libs: OpenCV, GStreamers, etc.)
+// Requirement: NVidia Jetson platform with L4T and NVidia Jetpack.
+// Requirement: OpenCV built from source with CUDA, GStreamer,
+//              and DNN modules. 
+// 				
 // GStreamer Pipline based on IMX477 CAMERA SENSOR.
-// -- (May require 3rd party driver for camera)
+// -- May require 3rd party driver.
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -136,8 +138,8 @@ int main()
 void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 {
 	std::vector<int> classIds;
-	std::vector<float> confidences;
-	std::vector<cv::Rect> boxes;
+	std::vector<float> detectedScores;
+	std::vector<cv::Rect> detectedBoxes;
 	// Iterate through all blobs output from the network. 
 	for (size_t i = 0; i < outputBlobs.size(); ++i)
 	{
@@ -146,12 +148,20 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 		// Iterate through each entry (row) in the <cv::Mat>outputBlob. 
 		for (int j = 0; j < outputBlobs[i].rows; ++j, data += outputBlobs[i].cols)
 		{
-			cv::Mat scores = outputBlobs[i].row(j).colRange(5, outputBlobs[i].cols);
-			cv::Point classIdPoint;
-			double confidence;
-			// Get value and location of max score.
-			cv::minMaxLoc(scores, 0, &confidence, 0, &classIdPoint);
-			if (confidence > confThreshold)
+			cv::Mat classScores = outputBlobs[i].row(j).colRange(5, outputBlobs[i].cols);
+			cv::Point classId;
+			double highestClassScore;
+
+			/* Get value and location of max score. 
+			   cv::minMaxLoc is a clever hack-y way to do this. It takes the cv::Mat of 
+			   potential classScores, which is essentially a 1D array, and puts the 
+			   highest score in highestClassScore and the location is stored as a "point",
+			   where the x-coordinate represents the class index. For this single-class
+			   case, this is all ridiculous, but the generality is important for multi-class
+			   cases, so I leave it here. 
+			*/
+			cv::minMaxLoc(classScores, 0, &highestClassScore, 0, &classId);
+			if (highestClassScore > confThreshold)
 			{
 				int centerX = (int)(data[0] * frame.cols);
 				int centerY = (int)(data[1] * frame.rows);
@@ -160,39 +170,53 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 				int left = centerX - width / 2;
 				int top = centerY - height / 2;
 
-				classIds.push_back(classIdPoint.x);
-				confidences.push_back((float)confidence);
-				boxes.push_back(cv::Rect(left, top, width, height));
+				classIds.push_back(classId.x);
+				detectedScores.push_back((float)highestClassScore);
+				detectedBoxes.push_back(cv::Rect(left, top, width, height));
 			}
 		}
 	}
 
 	// Non-maximum supperssion to remove redundant, lower-confidence boxes. 
 	std::vector<int> indexes;
-	dnn::NMSBoxes(boxes, confidences, confThreshold, nmsThreshold, indexes);
+	dnn::NMSBoxes(detectedBoxes, detectedScores, confThreshold, nmsThreshold, indexes);
 	for (size_t i = 0; i < indexes.size(); ++i)
 	{
 		int idx = indexes[i];
-		cv::Rect box = boxes[idx];
-		drawBox(classIds[idx], confidences[idx], 
-			    box.x, box.y, 
-				box.x + box.width, 
-				box.y + box.height, 
+		cv::Rect bestBox = detectedBoxes[idx];
+		
+		drawBox(classIds[idx], 
+				detectedScores[idx], 
+			    bestBox.x, 
+				bestBox.y, 
+				bestBox.x + bestBox.width, 
+				bestBox.y + bestBox.height, 
 				frame);
 	}
 }
 
 void drawBox(int classId, float conf, int left, int top, int right, int bottom, Mat& frame)
 {
-	rectangle(frame, cv::Point(left, top), cv::Point(right, bottom), cv::Scalar(255, 178, 50), 3);
+	rectangle(frame, 
+			  cv::Point(left, top), 
+			  cv::Point(right, bottom), 
+			  cv::Scalar(255, 178, 50), 3);
+
 	std::string label = format("%.2f", conf);
 	
 	int baseLine;
 	cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
 	top = max(top, labelSize.height);
+	
 	cv::rectangle(frame, 
 				  cv::Point(left, top - round(1.5 * labelSize.height)), 
 				  cv::Point(left + round(1.5 * labelSize.width), top + baseLine), 
 				  cv::Scalar(255, 255, 255), FILLED);
-	cv::putText(frame, label, Point(left, top), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(0, 0, 0), 1);
+	
+	cv::putText(frame, 
+				label, 
+				Point(left, top), 
+				cv::FONT_HERSHEY_SIMPLEX, 
+				0.75, 
+				cv::Scalar(0, 0, 0), 1);
 }
