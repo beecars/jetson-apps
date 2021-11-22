@@ -3,8 +3,8 @@
 // 2. Visualize facial landmarks in display window.
 
 // Requirement: NVidia Jetson platform with L4T and NVidia Jetpack.
-// Requirement: OpenCV built from source with CUDA, GStreamer,
-//              and DNN modules. 
+// Requirement: OpenCV built from source with CUDA, GStreamer, DNN, 
+//        		and "contrib" modules.
 // 				
 // GStreamer Pipline based on IMX477 CAMERA SENSOR.
 // -- May require 3rd party driver.
@@ -21,14 +21,6 @@
 #include <string>
 using namespace cv;
  
-// ---- DEBUG MODE.
-/* 
-	Setting DEBUG to true will disable the camera stream, and instead use a local
-    image file as the network input.
-*/ 
-bool DEBUG = true;
-std::string DEBUG_image_path = "/home/beecars/Projects/jetson-apps/face-landmark-detect/debug_image.jpg";
-
 // ---- SETUP PARAMS. 
 float confThreshold = 0.5;
 float nmsThreshold = 0.4;
@@ -40,30 +32,24 @@ void drawBox(int classId, float conf, int left, int top, int right, int bottom, 
 
 int main()
 {
-	// ---- INITIALIZE OPENCV VIDEO CAPTURE OBJECT.
-	/* 
-    	Define GStreamer pipeline based on following config:
-		- Jetson Nano (L4T, JetPack).
-		- IMX477 camera sensor (3rd party driver required).
-		Tuned for "aggresive" latency (downstream framerate not enforced, sink can drop frames).
+	/* ---- INITIALIZE OPENCV VIDEO CAPTURE OBJECT.
+       Define GStreamer pipeline based on following config:
+	   - Jetson Nano (L4T, JetPack).
+	   - IMX477 camera sensor (3rd party driver required).
+	   Tuned for "aggresive" latency (downstream framerate not enforced, sink can drop frames).
     */
-   	cv::Mat frame;	// Current frame Mat object.
-   	cv::VideoCapture cap;
+   	cv::Mat frame;	
 
-	if (!DEBUG)		// If not DEBUG, assign videocapture object.
-	{
-		std::string rx_gstream_pipe{};
-		rx_gstream_pipe = "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)1280, height=(int)720, framerate = 30/1 ! nvvidconv flip-method=6 ! video/x-raw, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink drop=true";
-		cv::VideoCapture cap(rx_gstream_pipe, CAP_GSTREAMER);
-	}
+	std::string rx_gstream_pipe{};
+	rx_gstream_pipe = "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)1280, height=(int)720, framerate = 30/1 ! nvvidconv flip-method=6 ! video/x-raw, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink drop=true";
+	cv::VideoCapture cap(rx_gstream_pipe, CAP_GSTREAMER);
 
-	// ---- INITIALIZE DNN MODULE.
-	/*
-		Custom face detection model from YOLOv4-tiny trained on Darknet:
-		Used WIDER-FACE dataset for robust detection. 
+	/* ---- INITIALIZE DNN MODULE.
+	   Custom face detection model from YOLOv4-tiny trained on Darknet:
+	   Used WIDER-FACE dataset for robust detection. 
 	*/
-	std::string yolo_face_cfg_Path{"/home/beecars/Projects/jetson-apps/face-landmark-detect/models/yolov4-tiny-face.cfg"};
-	std::string yolo_face_weights_Path{"/home/beecars/Projects/jetson-apps/face-landmark-detect/models/yolov4-tiny-face_final.weights"};
+	std::string yolo_face_cfg_Path{"../models/yolov4-tiny256-face.cfg"};
+	std::string yolo_face_weights_Path{"../models/yolov4-tiny256-face.weights"};
 	auto faceDetNet = dnn::readNetFromDarknet(yolo_face_cfg_Path, yolo_face_weights_Path);
 	faceDetNet.setPreferableBackend(dnn::DNN_BACKEND_CUDA);
 	faceDetNet.setPreferableTarget(dnn::DNN_TARGET_CUDA);
@@ -72,8 +58,6 @@ int main()
 	std::vector<std::string> outputBlobLayerNames = faceDetNet.getUnconnectedOutLayersNames();
 
 	// ---- STREAM PROCESSING.
-
-	// Define variables for frametime measurement.
 	double fps{0.0};
 	double fps_array[10] = {};
 	auto frametime_start = std::chrono::system_clock::now();
@@ -85,17 +69,11 @@ int main()
 	for (;;)
 	{
 		frametime_start = std::chrono::system_clock::now();
-
-		if (waitKey(1) == 'q')	// End reading stream.
-		{
+		if (waitKey(1) == 'q'){
 			break;
 		}
-		if (!DEBUG){
-			cap.read(frame);	// Read current frame from stream.
-		}
-		else {
-			frame = cv::imread(DEBUG_image_path);	// Read DEBUG image instead.
-		}
+
+		cap.read(frame);	// Read current frame from stream.
 
 		// ---- DETECT FACES
 		// Create blob for network input (RGB image).
@@ -104,11 +82,8 @@ int main()
 										   cv::Size(inputSize, inputSize), 
 										   cv::Scalar(0,0,0), 
 										   false, false);
-		// Set blob as network input.
+
 		faceDetNet.setInput(frameBlob);
-		
-		// Declare network output as blob (box coords, class names, confidences).
-		std::vector<cv::Mat> outputBlobs;
 		
 		// Feedforward input through network to get output blobs.
 		/* Details...
@@ -119,6 +94,7 @@ int main()
 			Column headers are:
 				| centerX | centerY | width | height | obj. score | class 0 conf. | ... | class N conf. |
 		*/
+		std::vector<cv::Mat> outputBlobs;
 		faceDetNet.forward(outputBlobs, outputBlobLayerNames);
 		
 		// Process and draw boxes on frame.
