@@ -25,10 +25,12 @@ using namespace cv;
 float confThreshold = 0.5;
 float nmsThreshold = 0.4;
 int inputSize = 256;
+int num_smoothingFrames = 10;
 
 // ---- INTIALIZE FUNCTIONS.
 void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs);
-void drawBox(int classId, float conf, int left, int top, int right, int bottom, Mat& frame);
+void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox);
+void drawBox(float conf, cv::Rect box, Mat& frame);
 
 int main()
 {
@@ -39,16 +41,11 @@ int main()
 	   Tuned for "aggresive" latency (downstream framerate not enforced, sink can drop frames).
     */
    	cv::Mat frame;	
-
+	
 	std::string rx_gstream_pipe{};
-	rx_gstream_pipe = "nvarguscamerasrc ! "
-					  "video/x-raw(memory:NVMM), width=(int)640, height=(int)360 framerate=(fraction)1/60 ! "
-					  "nvvidconv flip-method=6 ! "
-					  "video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! "
-					  "videoconvert ! "
-					  "video/x-raw, format=(string)BGR ! "
-					  "appsink drop=true";
+	rx_gstream_pipe = "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360 framerate=(fraction)1/60 ! nvvidconv flip-method=6 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink drop=true";
 	cv::VideoCapture cap(rx_gstream_pipe, CAP_GSTREAMER);
+	// frame = cv::imread("../debug_image.jpg");
 
 	/* ---- INITIALIZE DNN MODULE.
 	   Custom face detection model from YOLOv4-tiny trained on Darknet:
@@ -64,6 +61,7 @@ int main()
 	std::vector<std::string> outputBlobLayerNames = faceDetNet.getUnconnectedOutLayersNames();
 
 	// ---- STREAM PROCESSING.
+	// Initialize objects for FPS calculation.
 	double fps{0.0};
 	double fps_array[10] = {};
 	auto frametime_start = std::chrono::system_clock::now();
@@ -71,7 +69,6 @@ int main()
 	std::chrono::duration<double> elapsed_seconds = {}; 
 
 	// Begin reading stream.
-	std::cout << "Processing frames...\nPress 'Q' to terminate capture.\n";
 	for (;;)
 	{
 		frametime_start = std::chrono::system_clock::now();
@@ -83,11 +80,7 @@ int main()
 
 		// ---- DETECT FACES
 		// Create blob for network input (RGB image).
-		Mat frameBlob = dnn::blobFromImage(frame, 
-										   1/255.0, 
-										   cv::Size(inputSize, inputSize), 
-										   cv::Scalar(0,0,0), 
-										   false, false);
+		Mat frameBlob = dnn::blobFromImage(frame, 1/255.0, cv::Size(inputSize, inputSize), cv::Scalar(0,0,0), false, false);
 
 		faceDetNet.setInput(frameBlob);
 		
@@ -103,9 +96,8 @@ int main()
 		std::vector<cv::Mat> outputBlobs;
 		faceDetNet.forward(outputBlobs, outputBlobLayerNames);
 		
-		// Process and draw boxes on frame.
 		processBoxes(frame, outputBlobs);
-		
+
 		// Show detections.
 		imshow("Live Camera Stream", frame);
 
@@ -122,6 +114,7 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 	std::vector<int> classIds;
 	std::vector<float> detectedScores;
 	std::vector<cv::Rect> detectedBoxes;
+	std::vector<int> detectedAreas;
 	// Iterate through all blobs output from the network. 
 	for (size_t i = 0; i < outputBlobs.size(); ++i)
 	{
@@ -130,10 +123,6 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 		// Iterate through each entry (row) in the <cv::Mat>outputBlob. 
 		for (int j = 0; j < outputBlobs[i].rows; ++j, data += outputBlobs[i].cols)
 		{
-			cv::Mat classScores = outputBlobs[i].row(j).colRange(5, outputBlobs[i].cols);
-			cv::Point classId;
-			double highestClassScore;
-
 			/* Get value and location of max score. 
 			   cv::minMaxLoc is a clever hack-y way to do this. It takes the cv::Mat of 
 			   potential classScores, which is essentially a 1D array, and puts the 
@@ -142,6 +131,10 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 			   case, this is all ridiculous, but the generality is important for multi-class
 			   cases, so I leave it here. 
 			*/
+			cv::Mat classScores = outputBlobs[i].row(j).colRange(5, outputBlobs[i].cols);
+			cv::Point classId;
+			double highestClassScore;
+			
 			cv::minMaxLoc(classScores, 0, &highestClassScore, 0, &classId);
 			if (highestClassScore > confThreshold)
 			{
@@ -149,6 +142,7 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 				int centerY = (int)(data[1] * frame.rows);
 				int width = (int)(data[2] * frame.cols);
 				int height = (int)(data[3] * frame.rows);
+				int area = width*height;
 				int left = centerX - width / 2;
 				int top = centerY - height / 2;
 
@@ -159,46 +153,58 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 		}
 	}
 
-	// Non-maximum supperssion to remove redundant, lower-confidence boxes. 
-	std::vector<int> indexes;
-	dnn::NMSBoxes(detectedBoxes, detectedScores, confThreshold, nmsThreshold, indexes);
-	for (size_t i = 0; i < indexes.size(); ++i)
+	// Get box with highest confidence score.
+	if (detectedScores.size() > 0)
 	{
-		int idx = indexes[i];
-		cv::Rect bestBox = detectedBoxes[idx];
-		
-		drawBox(classIds[idx], 
-				detectedScores[idx], 
-			    bestBox.x, 
-				bestBox.y, 
-				bestBox.x + bestBox.width, 
-				bestBox.y + bestBox.height, 
-				frame);
+	int bestIdx;
+	double maxVal;
+	cv::Rect bestBox;
+	cv::minMaxIdx(detectedScores, 0, &maxVal, 0, &bestIdx);
+	bestBox = detectedBoxes[bestIdx];
+
+	// Smooth boxes across frames.
+	if (num_smoothingFrames > 1)
+	{
+		cv::Rect smoothedBox(0, 0, 0, 0);
+		cv::Rect nullBox(0, 0, 0, 0);
+		std::vector<cv::Rect> lastN_Boxes(num_smoothingFrames, nullBox);
+		// smoothBox(bestBox, &lastN_Boxes, &smoothedBox);	
 	}
+	
+	drawBox(detectedScores[bestIdx], bestBox, frame);
+	}
+	
+	// // Non-maximum supperssion to remove redundant, lower-confidence boxes. 
+	// std::vector<int> indexes;
+	// dnn::NMSBoxes(detectedBoxes, detectedScores, confThreshold, nmsThreshold, indexes);
+	// for (size_t i = 0; i < indexes.size(); ++i)
+	// {
+	// 	int idx = indexes[i];
+	// 	cv::Rect bestBox = detectedBoxes[idx];
+	// 	drawBox(classIds[idx], detectedScores[idx], bestBox.x, bestBox.y, bestBox.x + bestBox.width, bestBox.y + bestBox.height, frame);
+	// }
 }
 
-void drawBox(int classId, float conf, int left, int top, int right, int bottom, Mat& frame)
+void drawBox(float conf, cv::Rect box, cv::Mat& frame)
 {
-	rectangle(frame, 
-			  cv::Point(left, top), 
-			  cv::Point(right, bottom), 
-			  cv::Scalar(255, 178, 50), 3);
+	int left = box.x;
+	int top = box.y;
+	int right = box.x + box.width;
+	int bottom = box.y + box.height;
+
+	rectangle(frame, cv::Point(left, top), cv::Point(right, bottom), cv::Scalar(255, 178, 50), 3);
 
 	std::string label = format("%.2f", conf);
-	
 	int baseLine;
 	cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
 	top = max(top, labelSize.height);
 	
-	cv::rectangle(frame, 
-				  cv::Point(left, top - round(1.5 * labelSize.height)), 
-				  cv::Point(left + round(1.5 * labelSize.width), top + baseLine), 
-				  cv::Scalar(255, 255, 255), FILLED);
-	
-	cv::putText(frame, 
-				label, 
-				Point(left, top), 
-				cv::FONT_HERSHEY_SIMPLEX, 
-				0.75, 
-				cv::Scalar(0, 0, 0), 1);
+	cv::rectangle(frame, cv::Point(left, top - round(1.5 * labelSize.height)), cv::Point(left + round(1.5 * labelSize.width), top + baseLine), cv::Scalar(255, 255, 255), FILLED);
+
+	cv::putText(frame, label, Point(left, top), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(0, 0, 0), 1);
+}
+
+void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox)
+{
+
 }
