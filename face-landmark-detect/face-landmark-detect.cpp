@@ -1,5 +1,5 @@
 // FACE-LANDMARK-DETECT.CPP 
-// 1. Detect facial landmarks from a live camera stream.
+// 1. Detect facial landmarks for a single face from a live camera stream.
 // 2. Visualize facial landmarks in display window.
 
 // Requirement: NVidia Jetson platform with L4T and NVidia Jetpack.
@@ -25,10 +25,10 @@ using namespace cv;
 float confThreshold = 0.5;
 float nmsThreshold = 0.4;
 int inputSize = 256;
-int num_smoothingFrames = 10;
+int num_smoothingFrames = 5;
 
 // ---- INTIALIZE FUNCTIONS.
-void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs);
+void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox);
 void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox);
 void drawBox(float conf, cv::Rect box, Mat& frame);
 
@@ -68,6 +68,11 @@ int main()
 	auto frametime_end = std::chrono::system_clock::now();
 	std::chrono::duration<double> elapsed_seconds = {}; 
 
+	// Initialize objects for bestBox smoothing. 
+	cv::Rect smoothedBox(0, 0, 0, 0);
+	cv::Rect nullBox(0, 0, 0, 0);
+	std::vector<cv::Rect> lastN_Boxes(num_smoothingFrames, nullBox);
+
 	// Begin reading stream.
 	for (;;)
 	{
@@ -96,7 +101,7 @@ int main()
 		std::vector<cv::Mat> outputBlobs;
 		faceDetNet.forward(outputBlobs, outputBlobLayerNames);
 		
-		processBoxes(frame, outputBlobs);
+		processBoxes(frame, outputBlobs, lastN_Boxes, smoothedBox);
 
 		// Show detections.
 		imshow("Live Camera Stream", frame);
@@ -109,7 +114,7 @@ int main()
 	}
 }
 
-void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
+void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox)
 {
 	std::vector<int> classIds;
 	std::vector<float> detectedScores;
@@ -156,22 +161,17 @@ void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs)
 	// Get box with highest confidence score.
 	if (detectedScores.size() > 0)
 	{
-	int bestIdx;
-	double maxVal;
-	cv::Rect bestBox;
-	cv::minMaxIdx(detectedScores, 0, &maxVal, 0, &bestIdx);
-	bestBox = detectedBoxes[bestIdx];
+		int bestIdx;
+		double maxVal;
+		cv::Rect bestBox;
+		cv::minMaxIdx(detectedScores, 0, &maxVal, 0, &bestIdx);
+		bestBox = detectedBoxes[bestIdx];
 
-	// Smooth boxes across frames.
-	if (num_smoothingFrames > 1)
-	{
-		cv::Rect smoothedBox(0, 0, 0, 0);
-		cv::Rect nullBox(0, 0, 0, 0);
-		std::vector<cv::Rect> lastN_Boxes(num_smoothingFrames, nullBox);
-		// smoothBox(bestBox, &lastN_Boxes, &smoothedBox);	
-	}
-	
-	drawBox(detectedScores[bestIdx], bestBox, frame);
+		// Smooth boxes across frames.
+		smoothBox(bestBox, lastN_Boxes, smoothedBox);
+
+		// Draw the smoothed box on frame.
+		drawBox(detectedScores[bestIdx], smoothedBox, frame);
 	}
 	
 	// // Non-maximum supperssion to remove redundant, lower-confidence boxes. 
@@ -206,5 +206,26 @@ void drawBox(float conf, cv::Rect box, cv::Mat& frame)
 
 void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox)
 {
-
+	lastN_Boxes.insert(lastN_Boxes.begin(), currentBox);
+	lastN_Boxes.erase(lastN_Boxes.begin() + 10);
+	int N = num_smoothingFrames;
+	int sumLeft = 0;
+	int sumTop = 0; 
+	int sumWidth = 0; 
+	int sumHeight = 0; 
+	for (int boxIdx = 0; boxIdx < lastN_Boxes.size(); boxIdx++)
+	{
+		sumLeft += lastN_Boxes[boxIdx].x;
+		sumTop += lastN_Boxes[boxIdx].y;
+		sumWidth += lastN_Boxes[boxIdx].width;
+		sumHeight += lastN_Boxes[boxIdx].height;
+	}
+	// Here we purposefully return a "square" detection box for input into a landmark detection network.
+	// The largest of height vs. width is used. 
+	if (sumHeight > sumWidth){
+		smoothedBox = cv::Rect(std::max(0, sumLeft/N-(sumHeight/N-sumWidth/N)/2), sumTop/N, sumHeight/N, sumHeight/N);
+	}
+	else{
+		smoothedBox = cv::Rect(sumLeft/N, std::max(0, sumTop/N-(sumWidth/N-sumHeight/N)/2), sumWidth/N, sumWidth/N);
+	}
 }
