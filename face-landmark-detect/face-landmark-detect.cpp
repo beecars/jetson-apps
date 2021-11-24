@@ -22,7 +22,7 @@
 using namespace cv;
  
 // ---- SETUP PARAMS. 
-float confThreshold = 0.5;
+float confThreshold = 0.3;
 float nmsThreshold = 0.4;
 int inputSize = 256;
 int num_smoothingFrames = 5;
@@ -31,6 +31,7 @@ int num_smoothingFrames = 5;
 void processBoxes(cv::Mat& frame, const std::vector<cv::Mat>& outputBlobs, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox);
 void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox);
 void drawBox(float conf, cv::Rect box, Mat& frame);
+void printStats(cv::Mat& frame, int& counter, const int& frame_mseconds, const int& yolo_mseconds);
 
 int main()
 {
@@ -40,7 +41,8 @@ int main()
 	   - IMX477 camera sensor (3rd party driver required).
 	   Tuned for "aggresive" latency (downstream framerate not enforced, sink can drop frames).
     */
-   	cv::Mat frame;	
+   	cv::Mat frame;
+	cv::Mat croppedFace;
 	
 	std::string rx_gstream_pipe{};
 	rx_gstream_pipe = "nvarguscamerasrc ! video/x-raw(memory:NVMM), width=(int)640, height=(int)360 framerate=(fraction)1/60 ! nvvidconv flip-method=6 ! video/x-raw, width=(int)640, height=(int)360, format=(string)BGRx ! videoconvert ! video/x-raw, format=(string)BGR ! appsink drop=true";
@@ -62,11 +64,12 @@ int main()
 
 	// ---- STREAM PROCESSING.
 	// Initialize objects for FPS calculation.
-	double fps{0.0};
-	double fps_array[10] = {};
-	auto frametime_start = std::chrono::system_clock::now();
-	auto frametime_end = std::chrono::system_clock::now();
-	std::chrono::duration<double> elapsed_seconds = {}; 
+	int updateCounter = 0;
+	double fps = 0.0;
+	auto frame_start = std::chrono::high_resolution_clock::now();
+	auto frame_end = std::chrono::high_resolution_clock::now();
+	auto yolo_start = std::chrono::high_resolution_clock::now();
+	auto yolo_end = std::chrono::high_resolution_clock::now();
 
 	// Initialize objects for bestBox smoothing. 
 	cv::Rect smoothedBox(0, 0, 0, 0);
@@ -76,7 +79,7 @@ int main()
 	// Begin reading stream.
 	for (;;)
 	{
-		frametime_start = std::chrono::system_clock::now();
+		frame_start = std::chrono::high_resolution_clock::now();
 		if (waitKey(1) == 'q'){
 			break;
 		}
@@ -86,7 +89,6 @@ int main()
 		// ---- DETECT FACES
 		// Create blob for network input (RGB image).
 		Mat frameBlob = dnn::blobFromImage(frame, 1/255.0, cv::Size(inputSize, inputSize), cv::Scalar(0,0,0), false, false);
-
 		faceDetNet.setInput(frameBlob);
 		
 		// Feedforward input through network to get output blobs.
@@ -99,18 +101,20 @@ int main()
 				| centerX | centerY | width | height | obj. score | class 0 conf. | ... | class N conf. |
 		*/
 		std::vector<cv::Mat> outputBlobs;
+
+		yolo_start = std::chrono::high_resolution_clock::now();
 		faceDetNet.forward(outputBlobs, outputBlobLayerNames);
-		
+		yolo_end = std::chrono::high_resolution_clock::now();
+
 		processBoxes(frame, outputBlobs, lastN_Boxes, smoothedBox);
-
+		
+		// Calculate stats for print to console.
+		frame_end = std::chrono::high_resolution_clock::now();
+		int frame_mseconds = std::chrono::duration_cast<std::chrono::milliseconds>(frame_end - frame_start).count();
+		int yolo_mseconds = std::chrono::duration_cast<std::chrono::milliseconds>(yolo_end - yolo_start).count();
 		// Show detections.
+		printStats(frame, updateCounter, frame_mseconds, yolo_mseconds);
 		imshow("Live Camera Stream", frame);
-
-	// Print framerate to console. 
-	frametime_end = std::chrono::system_clock::now();
-	elapsed_seconds = frametime_end - frametime_start;
-	fps = 1.0 / elapsed_seconds.count();
-	std::cout << fps << '\n';
 	}
 }
 
@@ -198,10 +202,8 @@ void drawBox(float conf, cv::Rect box, cv::Mat& frame)
 	int baseLine;
 	cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
 	top = max(top, labelSize.height);
-	
-	cv::rectangle(frame, cv::Point(left, top - round(1.5 * labelSize.height)), cv::Point(left + round(1.5 * labelSize.width), top + baseLine), cv::Scalar(255, 255, 255), FILLED);
-
-	cv::putText(frame, label, Point(left, top), cv::FONT_HERSHEY_SIMPLEX, 0.75, cv::Scalar(0, 0, 0), 1);
+	cv::rectangle(frame, cv::Point(left, (top - labelSize.height)), cv::Point((left + labelSize.width), top + baseLine), cv::Scalar(255, 255, 255), FILLED);
+	cv::putText(frame, label, Point(left, top), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
 }
 
 void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect& smoothedBox)
@@ -210,9 +212,9 @@ void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect
 	lastN_Boxes.erase(lastN_Boxes.begin() + 10);
 	int N = num_smoothingFrames;
 	int sumLeft = 0;
-	int sumTop = 0; 
-	int sumWidth = 0; 
-	int sumHeight = 0; 
+	int sumTop = 0;
+	int sumWidth = 0;
+	int sumHeight = 0;
 	for (int boxIdx = 0; boxIdx < lastN_Boxes.size(); boxIdx++)
 	{
 		sumLeft += lastN_Boxes[boxIdx].x;
@@ -228,4 +230,16 @@ void smoothBox(cv::Rect currentBox, std::vector<cv::Rect>& lastN_Boxes, cv::Rect
 	else{
 		smoothedBox = cv::Rect(sumLeft/N, std::max(0, sumTop/N-(sumWidth/N-sumHeight/N)/2), sumWidth/N, sumWidth/N);
 	}
+}
+
+void printStats(cv::Mat& frame, int& counter, const int& frame_mseconds, const int& yolo_mseconds)
+{
+	int fps = static_cast<int>(1.0 / (frame_mseconds / 1000.0));
+	std::string label = format("Frame: %ims (%ifps) | YOLOv4-Tiny: %i ms", frame_mseconds, fps, yolo_mseconds);
+	int baseLine;
+	int posLeft = 0;
+	int posTop = frame.rows;
+	cv::Size labelSize = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
+	cv::rectangle(frame, cv::Point(posLeft, posTop - round(1.5 * labelSize.height)), cv::Point((posLeft + labelSize.width), posTop + baseLine), cv::Scalar(255, 255, 255), FILLED);
+	cv::putText(frame, label, Point(posLeft, posTop - 4), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 1);
 }
